@@ -1,6 +1,6 @@
 import { getToken } from '@/utils/auth'
 
-export function sendChatMessage({ prompt, chatId }) {
+export function sendChatMessage({ prompt, chatId, signal }) {
   const baseURL = import.meta.env.VITE_APP_BASE_API || ''
   //用 URLSearchParams 做参数编码：否则提问中的 & # % 换行 等字符会截断或破坏请求参数
   const params = new URLSearchParams({
@@ -9,11 +9,25 @@ export function sendChatMessage({ prompt, chatId }) {
   })
   return fetch(baseURL + '/ai/chat?' + params.toString(), {
     method: 'POST',
+    signal: signal, // 传入 AbortController 的 signal，便于在前端主动中断接收
     headers: {
       'Content-Type': 'application/json',
       'Authorization': getToken() ? 'Bearer ' + getToken() : undefined
     }
   })
+}
+
+// 打断后端正在进行的流式对话（已生成的内容会保留并补存到会话记录）
+export function stopChatMessage(chatId) {
+  const baseURL = import.meta.env.VITE_APP_BASE_API || ''
+  const idStr = chatId == null ? '' : String(chatId)
+  return fetch(baseURL + '/ai/chat/stop?chatId=' + encodeURIComponent(idStr), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': getToken() ? 'Bearer ' + getToken() : undefined
+    }
+  }).then(res => res.json())
 }
 
 export function getChatHistoryIds() {

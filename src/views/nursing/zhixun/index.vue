@@ -53,6 +53,9 @@
           <button class="send-button" @click="sendMessage" :disabled="isStreaming || !userInput.trim()">
             发送
           </button>
+          <button class="stop-button" @click="stopMessage" :disabled="!isStreaming">
+            停止
+          </button>
         </div>
       </div>
     </div>
@@ -62,7 +65,7 @@
 <script setup>
 import { ref, nextTick, onMounted } from 'vue'
 import { useDark } from '@vueuse/core'
-import { sendChatMessage, getChatHistoryIds, getChatHistoryDetail, deleteChatHistory } from '@/api/nursing/ai'
+import { sendChatMessage, stopChatMessage, getChatHistoryIds, getChatHistoryDetail, deleteChatHistory } from '@/api/nursing/ai'
 import { marked } from 'marked'
 import hljs from 'highlight.js'
 import 'highlight.js/styles/github.css'
@@ -87,6 +90,9 @@ const currentChatId = ref('') // 当前会话ID，统一使用字符串比较
 
 const historyList = ref([]) // 历史会话列表 [{id, name}]
 const persistedIds = ref([]) // 后端已保存的会话ID（用于区分本地新建会话与后端会话）
+
+let abortController = null // 当前流式请求的中断控制器
+let stoppedByUser = false // 本次对话是否被用户主动打断
 
 // 生成唯一ID（用于新对话）- 时间戳字符串，最终会作为会话ID保存到后端
 const generateTempId = () => {
@@ -191,9 +197,11 @@ const sendMessage = async () => {
   // 先插入AI回复的占位气泡，后续按索引更新内容
   const aiIndex = messages.value.push({ role: 'assistant', content: '' }) - 1
   isStreaming.value = true
+  stoppedByUser = false
+  abortController = new AbortController()
   try {
     const chatId = currentChatId.value
-    const response = await sendChatMessage({ prompt, chatId })
+    const response = await sendChatMessage({ prompt, chatId, signal: abortController.signal })
     if (!response.body) throw new Error('无流式响应')
 
     // 后端在接收消息时已把该会话ID保存到当前用户的会话列表中，这里标记为已保存
@@ -220,17 +228,47 @@ const sendMessage = async () => {
       await scrollToBottom()
     }
     if (!accumulated) {
-      messages.value[aiIndex].content = '抱歉，没有收到回复，请稍后重试。'
+      //被打断时还没来得及生成内容，给出提示；否则按异常处理
+      messages.value[aiIndex].content = stoppedByUser ? '（已打断）' : '抱歉，没有收到回复，请稍后重试。'
     }
   } catch (e) {
-    console.error('智能客服对话失败:', e)
-    messages.value[aiIndex].content = '抱歉，发生了错误，请稍后重试。'
+    //用户主动打断导致的 AbortError 不算异常，保留已经生成的内容即可
+    if (stoppedByUser) {
+      console.log('已打断流式输出，保留已生成的内容')
+      //一个字都还没生成就被打断时，给出提示
+      if (!messages.value[aiIndex].content) {
+        messages.value[aiIndex].content = '（已打断）'
+      }
+    } else {
+      console.error('智能客服对话失败:', e)
+      messages.value[aiIndex].content = '抱歉，发生了错误，请稍后重试。'
+    }
   } finally {
+    abortController = null
+    stoppedByUser = false
     isStreaming.value = false
     await scrollToBottom()
 
     // 会话结束后，刷新历史列表（异步执行，不阻塞UI）
     refreshHistoryList()
+  }
+}
+
+/**
+ * 打断当前流式对话：
+ * 1. 先中断本地接收：界面立即恢复，右侧已显示的内容不会被清除
+ * 2. 再通知后端停止生成（后端会结束模型输出并补存已生成的内容）
+ */
+const stopMessage = async () => {
+  if (!isStreaming.value) return
+  stoppedByUser = true
+  if (abortController) {
+    abortController.abort()
+  }
+  try {
+    await stopChatMessage(currentChatId.value)
+  } catch (e) {
+    console.error('通知后端打断流式对话失败:', e)
   }
 }
 
@@ -466,6 +504,25 @@ textarea {
   transition: background 0.2s;
 }
 .send-button:disabled {
+  background: #ccc;
+  cursor: not-allowed;
+}
+.stop-button {
+  min-width: 80px;
+  height: 3rem;
+  border: none;
+  border-radius: 0.75rem;
+  background: #f56c6c;
+  color: #fff;
+  font-weight: bold;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.stop-button:hover {
+  background: #e04b4b;
+}
+.stop-button:disabled {
   background: #ccc;
   cursor: not-allowed;
 }
