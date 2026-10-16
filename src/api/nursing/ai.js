@@ -2,7 +2,12 @@ import { getToken } from '@/utils/auth'
 
 export function sendChatMessage({ prompt, chatId }) {
   const baseURL = import.meta.env.VITE_APP_BASE_API || ''
-  return fetch(baseURL + '/ai/chat?prompt=' + prompt + '&chatId=' + chatId, {
+  //用 URLSearchParams 做参数编码：否则提问中的 & # % 换行 等字符会截断或破坏请求参数
+  const params = new URLSearchParams({
+    prompt: prompt == null ? '' : String(prompt),
+    chatId: chatId == null ? '' : String(chatId)
+  })
+  return fetch(baseURL + '/ai/chat?' + params.toString(), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
